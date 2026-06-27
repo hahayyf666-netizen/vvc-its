@@ -4,8 +4,9 @@
 
 [![VVC](https://img.shields.io/badge/Standard-VVC%20(H.266)-blue)](https://www.itu.int/rec/T-REC-H.266)
 [![Verilog](https://img.shields.io/badge/HDL-Verilog-blue)](https://en.wikipedia.org/wiki/Verilog)
-[![500MHz](https://img.shields.io/badge/Fmax-500MHz-green)](#6-综合与-ppa)
-[![Tests](https://img.shields.io/badge/Tests-3075%20passed-brightgreen)](#5-仿真与验证)
+[![516MHz](https://img.shields.io/badge/Fmax-516MHz-green)](#6-综合与-ppa)
+[![DSP5](https://img.shields.io/badge/DSP-5-blue)](#6-综合与-ppa)
+[![Tests](https://img.shields.io/badge/Tests-94%20passed-brightgreen)](#5-仿真与验证)
 
 ---
 
@@ -23,7 +24,9 @@
 | 计算性能 | 4 个并行 MAC，每周期产出 4 个结果点 |
 | 接口 | 22-bit it_info，符合赛题规范 |
 | 反压 | 输入/输出均支持按点反压 (backpressure) |
-| 时钟 | 500MHz 达标 (UltraScale+ OOC WNS=+0.058ns) |
+| **时钟** | **516MHz 达标 (UltraScale+ OOC WNS=+0.083ns)** |
+| **DSP** | **5 个 DSP48E2 (行/列引擎复用)** |
+| **功耗** | **0.207W 动态功耗 @ 516MHz** |
 
 ### 处理流程
 
@@ -285,26 +288,29 @@ vsim -c work.its_core_500_tb -do "run -all"
 
 ## 6. 综合与 PPA
 
-### 6.1 500MHz OOC 综合结果 — UltraScale+ (v5.3 its_core_500)
+### 6.1 500MHz OOC 综合结果 — UltraScale+ (v1.2 its_core_500) ⭐ 最优版本
 
-**设计**: its_core_500（500MHz 计算核心，含行/列引擎 + LFNST + XPM BRAM in_mem）
+**设计**: its_core_500（500MHz 计算核心，行/列引擎复用 + LFNST + XPM BRAM in_mem）
 **目标器件**: Kintex UltraScale+ xcku5p-ffvb676-2-e
 **时钟约束**: clk_core 500MHz (2ns)
 **综合方式**: Out-of-Context (OOC)
+**关键优化**: P2 行/列引擎复用 (DSP 9→5)，P3 BRAM 优化
 
 | 资源 | 使用 | 说明 |
 |------|------|------|
-| DSP48E2 | 9 | — |
-| Block RAM Tile | 14 | 含 in_mem (XPM BRAM) |
-| CLB LUT | 2843 | — |
-| CLB Register | 2882 | — |
+| **DSP48E2** | **5** | 行/列引擎复用，省 4 个 DSP |
+| Block RAM Tile | 12 | 含 in_mem (XPM BRAM) |
+| CLB LUT | 1630 | — |
+| CLB Register | 1952 | — |
 
 | 指标 | 值 | 状态 |
 |------|-----|------|
-| WNS (Setup) | **+0.030 ns** | **MET** |
+| WNS (Setup) | **+0.083 ns** | **MET** |
 | TNS | 0.000 ns | — |
 | WHS (Hold) | +0.020 ns | MET |
 | Failing Endpoints | **0** | — |
+| **动态功耗** | **0.207 W** | — |
+| **总功耗** | **0.659 W** | — |
 
 ### 6.1b 500MHz OOC 综合结果 — UltraScale+ (v5.3 Wrapper 完整系统)
 
@@ -405,7 +411,7 @@ vsim -c work.its_core_500_tb -do "run -all"
 | 输出反压 | ✅ | it_data_out_req，8 个反压测试验证通过 |
 | Verilog 实现 | ✅ | |
 | it_data_end 接口 | ✅ | 赛题 4/24 更新要求 |
-| 500MHz 主频 | ✅ | its_top_500_wrapper OOC UltraScale+ (xcku5p-2) WNS=+0.058ns 达标；Artix-7 WNS=-1.733ns 不可达，详见 6.1/6.2 节 |
+| 500MHz 主频 | ✅ | **v1.2: WNS=+0.083ns (516MHz)**，UltraScale+ 达标；Artix-7 不可达 |
 | 量化定标分析 | ✅ | 见 doc/design_doc.md 第 5.2 节 |
 | PPA 报告 | ✅ | 见 doc/ppa_report.md |
 | 设计文档 | ✅ | 见 doc/design_doc.md、doc/ITS_VVC_完全学习指南.md |
