@@ -422,10 +422,9 @@ module its_core_500 (
     end
 
     // LFNST overlay buffer write (direct, no pipeline — small buffer, low fanout)
+    // Note: No clearing needed - LFNST module writes all entries before reading
     always @(posedge clk_core) begin
-        if (clearing && clr_cnt < 12'd48) begin
-            lfnst_out_buf[clr_cnt[5:0]] <= 16'sd0;
-        end else if (lfnst_data_out_wr_en) begin
+        if (lfnst_data_out_wr_en) begin
             lfnst_out_buf[lfnst_wr_addr] <= lfnst_data_out;
         end
     end
