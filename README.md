@@ -1,12 +1,17 @@
 # VVC 反变换模块 (ITS) — RTL 实现
 
-第九届中国研究生创芯大赛 · 华为赛题一
+> 第九届中国研究生创芯大赛 · 华为赛题一
+
+[![VVC](https://img.shields.io/badge/Standard-VVC%20(H.266)-blue)](https://www.itu.int/rec/T-REC-H.266)
+[![Verilog](https://img.shields.io/badge/HDL-Verilog-blue)](https://en.wikipedia.org/wiki/Verilog)
+[![500MHz](https://img.shields.io/badge/Fmax-500MHz-green)](#6-综合与-ppa)
+[![Tests](https://img.shields.io/badge/Tests-3075%20passed-brightgreen)](#5-仿真与验证)
 
 ---
 
 ## 1. 项目概述
 
-本项目实现了 VVC (H.266) 视频编码标准的反变换模块 (Inverse Transform Subsystem, ITS)，用于解码端将频域系数还原为时域残差信号。
+本项目实现了 **VVC (H.266)** 视频编码标准的反变换模块 (Inverse Transform Subsystem, ITS)，用于解码端将频域系数还原为时域残差信号。
 
 ### 核心能力
 
@@ -18,6 +23,7 @@
 | 计算性能 | 4 个并行 MAC，每周期产出 4 个结果点 |
 | 接口 | 22-bit it_info，符合赛题规范 |
 | 反压 | 输入/输出均支持按点反压 (backpressure) |
+| 时钟 | 500MHz 达标 (UltraScale+ OOC WNS=+0.058ns) |
 
 ### 处理流程
 
@@ -30,7 +36,7 @@
 ## 2. 目录结构
 
 ```
-its_vvc/
+vvc-its/
 ├── rtl/                            # RTL 源代码
 │   ├── its_top.v                   # 顶层模块 (单时钟，赛题接口)
 │   ├── its_top_500_wrapper.v       # 500MHz 顶层 wrapper (CDC + 赛题接口)
@@ -46,35 +52,46 @@ its_vvc/
 │   ├── its_lfnst_rom.v             # LFNST 系数 ROM (8192 系数)
 │   ├── rom_coeffs.hex              # 变换核系数数据
 │   └── lfnst_coeffs.hex            # LFNST 系数数据
-├── doc/
-│   ├── ITS_VVC_技术报告.docx       # 竞赛技术报告 (含 15 张架构图)
-│   ├── ITS_VVC_完全学习指南.md     # 面向零基础的完整学习指南
+├── tb/                             # 测试平台
+│   ├── its_tb.v                    # its_top 测试平台 (1444 个测试用例)
+│   ├── its_tb_500.v                # 500MHz wrapper 测试平台 (1537 个测试)
+│   ├── its_core_500_tb.v           # core_500 测试平台 (94 个测试)
+│   ├── its_tb_simple.v             # 简化测试平台
+│   ├── tb_async_fifo.v             # 异步 FIFO 单元测试
+│   ├── tb_core_500_direct.v        # core_500 直接测试
+│   ├── rom_check.v                 # ROM 校验模块
+│   └── test_vectors/               # 测试向量 (需运行脚本生成，见下文)
+├── doc/                            # 文档
 │   ├── design_doc.md               # 设计文档
 │   ├── verification_report.md      # 验证报告
 │   ├── ppa_report.md               # PPA 报告
+│   ├── ITS_VVC_完全学习指南.md     # 面向零基础的完整学习指南
+│   ├── learning_guide.md           # 学习指南
 │   ├── fix_log.md                  # 修复记录
-│   └── images/                     # 技术架构图 (15 张 PNG)
-├── tb/
-│   ├── its_tb.v                    # 测试平台 (1444 个测试用例)
-│   ├── its_tb_500.v                # 500MHz wrapper 测试平台 (1537 个测试)
-│   ├── its_core_500_tb.v           # core_500 测试平台 (94 个测试)
-│   └── test_vectors/               # 测试向量 (.hex 文件)
-├── sim/
-│   ├── run.do                      # its_top ModelSim 仿真脚本
-│   ├── run_500.do                  # 500MHz wrapper 仿真脚本
-│   ├── run_core_500.do             # core_500 仿真脚本
-│   ├── rom_coeffs.hex              # 变换核系数 (symlink)
-│   └── lfnst_coeffs.hex            # LFNST 系数 (symlink)
-├── synth/
-│   ├── its_core_500_ooc_usp.tcl    # UltraScale+ OOC 综合脚本 (500MHz 达标)
-│   ├── its_wrapper_500_ooc_usp.tcl # Wrapper OOC 综合脚本
-│   ├── its_core_500_ooc.tcl        # Artix-7 OOC 综合脚本
-│   └── timing*.xdc                 # 时序约束文件
-└── scripts/
-    ├── gen_rom_coeffs.py           # 变换核系数生成
-    ├── gen_test_vectors.py         # 测试向量生成
-    ├── ref_model.py                # Python 参考模型 (golden model)
-    └── parse_lfnst_matrices.py     # LFNST 矩阵解析
+│   ├── 500mhz_architecture_plan.md # 500MHz 架构规划
+│   ├── core_500mhz_timing_report.md # 时序分析报告
+│   ├── implementation_status_report.md # 实现状态报告
+│   ├── completion_assessment.md    # 完成度评估
+│   ├── images/                     # 技术架构图 (15 张 PNG)
+│   └── waveforms/                  # 时序波形图 (6 张 SVG)
+├── scripts/                        # 工具脚本
+│   ├── gen_rom_coeffs.py           # 变换核系数生成
+│   ├── gen_test_vectors.py         # 测试向量生成 (运行后产生 tb/test_vectors/)
+│   ├── ref_model.py                # Python 参考模型 (golden model)
+│   ├── parse_lfnst_matrices.py     # LFNST 矩阵解析
+│   ├── parse_official_coeffs.py    # 官方系数解析
+│   ├── gen_report_docx.py          # 报告生成
+│   ├── draw_waveforms.py           # 波形图绘制
+│   └── pack_deliverable.sh         # 交付打包脚本
+├── rom_coeffs.hex                  # 变换核系数 (根目录副本)
+├── lfnst_coeffs.hex                # LFNST 系数 (根目录副本)
+├── fix_plan.md                     # 修复计划
+└── completion_assessment.md        # 完成度评估
+
+未纳入仓库 (可通过脚本生成或综合工具重新产出):
+├── sim/                            # ModelSim 仿真工作目录
+├── synth/                          # Vivado 综合产物
+└── tb/test_vectors/                # 测试向量 (运行 scripts/gen_test_vectors.py 生成)
 ```
 
 ---
@@ -211,19 +228,28 @@ it_info [21:0]
 
 ## 5. 仿真与验证
 
-### 5.1 运行仿真
+### 5.1 快速开始
 
 ```bash
+# 1. 克隆仓库
+git clone https://github.com/hahayyf666-netizen/vvc-its.git
+cd vvc-its
+
+# 2. 生成测试向量 (tb/test_vectors/ 目录)
+python scripts/gen_test_vectors.py
+
+# 3. 运行仿真 (需要 ModelSim)
 # its_top 单时钟回归 (1444 个测试)
-cd sim
-vsim -c -do "do run.do"
+vsim -c -do "source scripts/../sim/run.do; run -all"
 
 # 500MHz wrapper 回归 (1537 个测试: 1377 回归 + 40 反压 + 30 协议 + 1 two-TU)
-vsim -c -do "do run_500.do"
+vsim -c -do "source scripts/../sim/run_500.do; run -all"
 
 # its_core_500 回归 (94 个测试)
 vsim -c work.its_core_500_tb -do "run -all"
 ```
+
+> **注意**: `sim/`、`synth/`、`tb/test_vectors/` 目录未纳入仓库。仿真前需先用 `scripts/gen_test_vectors.py` 生成测试向量。综合需自行创建 Vivado 工程或参考 `doc/design_doc.md` 中的综合脚本说明。
 
 ### 5.2 测试用例覆盖
 
@@ -351,15 +377,16 @@ vsim -c work.its_core_500_tb -do "run -all"
 
 ### 6.4 运行综合
 
-```bash
-# 500MHz OOC 综合 — UltraScale+ (推荐，500MHz 达标)
-cd synth
-vivado -mode batch -source its_core_500_ooc_usp.tcl
+综合脚本 (`synth/*.tcl`) 和约束文件未纳入仓库，需自行创建 Vivado 工程。参考步骤：
 
-# 500MHz OOC 综合 — Artix-7 (基线，WNS -1.733ns)
-cd synth
-vivado -mode batch -source its_core_500_ooc.tcl
+```bash
+# 1. 在 Vivado 中创建工程，添加 rtl/ 下所有 .v 文件
+# 2. 设置 verilog_define: SYNTHESIS
+# 3. 添加时序约束 (clk_core 500MHz / 2ns)
+# 4. 运行 OOC 综合
 ```
+
+详细综合流程参见 `doc/design_doc.md` 和 `doc/ppa_report.md`。
 
 ---
 
@@ -381,7 +408,7 @@ vivado -mode batch -source its_core_500_ooc.tcl
 | 500MHz 主频 | ✅ | its_top_500_wrapper OOC UltraScale+ (xcku5p-2) WNS=+0.058ns 达标；Artix-7 WNS=-1.733ns 不可达，详见 6.1/6.2 节 |
 | 量化定标分析 | ✅ | 见 doc/design_doc.md 第 5.2 节 |
 | PPA 报告 | ✅ | 见 doc/ppa_report.md |
-| 设计文档 | ✅ | 见 doc/design_doc.md |
+| 设计文档 | ✅ | 见 doc/design_doc.md、doc/ITS_VVC_完全学习指南.md |
 
 ---
 
@@ -580,3 +607,9 @@ vivado -mode batch -source its_core_500_ooc.tcl
 | ModelSim | SE-64 10.6e | 功能仿真 |
 | Vivado | 2024.1 | 综合与实现 |
 | Python | 3.x | 系数生成、参考模型 |
+
+---
+
+## 10. 许可证
+
+本项目为第九届中国研究生创芯大赛参赛作品，仅供学习与参考。
