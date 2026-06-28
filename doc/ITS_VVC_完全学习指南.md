@@ -130,18 +130,14 @@ result = clip(result, -32768, 32767)  // 裁剪到 16 位有符号范围
 
 ## 3. 整体架构总览
 
-### 3.1 两种顶层架构
+### 3.1 提交架构
 
-本项目提供两个版本：
+本项目提交采用双时钟 CDC 架构：
 
 ```
-版本1：its_top.v（单时钟版本）
-  外部接口 → its_top → 内部直接处理
-  适用于：单时钟域系统，或作为参考设计
-
-版本2：its_top_500_wrapper.v + its_core_500.v（双时钟版本）
+its_top_500_wrapper.v + its_core_500.v（提交版本）
   外部接口 → its_top_500_wrapper → [异步FIFO CDC] → its_core_500 → 内部处理
-  适用于：500MHz 高性能 FPGA，外部接口跑低速时钟
+  接口时钟 100MHz，核心时钟 500MHz，5 DSP (行/列共享引擎)
 ```
 
 ### 3.2 模块层次结构
@@ -182,7 +178,7 @@ its_top_500_wrapper（顶层）
 
 ### 4.1 its_pkg.v — 共享定义包
 
-**作用：** 把两个顶层模块（its_top.v 和 its_core_500.v）中完全相同的定义提取出来，避免代码重复。
+**作用：** 提取 its_core_500 中共用的状态编码和位移乘法函数，避免代码重复。
 
 ```verilog
 package its_pkg;
@@ -326,18 +322,18 @@ S_IDLE → S_LOAD → S_PREFETCH → S_COMPUTE → S_PREFETCH → ... → S_OUTP
 
 由于 LFNST 最多只有 48 个输入、16/48 个输出，计算量小，用 1 个 MAC 串行处理即可（16 或 48 个周期 × 16 次累加）。不需要 4 路并行。
 
-### 4.7 its_top.v — 单时钟顶层
+### 4.7 its_core_500.v — 500MHz 计算核心
 
-**作用：** 整合所有模块，提供竞赛标准的 22-bit it_info 接口。
+**作用：** 整合所有模块，提供赛题标准的 22-bit it_info 接口，运行在 500MHz。
 
 **状态机流程：**
 
 ```
-S_IDLE: 等待 it_info_vld
+S_IDLE: 等待 cmd_fifo 中的 it_info
   ↓
-S_CLEAR: 清零 in_mem（只清 total_points 个条目，不全清 4096）
+S_CLEAR: 清零 in_mem（只清 total_points 个条目）
   ↓
-S_LOAD: 接收外部输入数据（稀疏：只接收非零系数）
+S_LOAD: 从 input_fifo 接收稀疏输入系数
   ↓
 S_LFNST: 如果 lfnst_idx != 0，执行 LFNST 预处理
   ↓
@@ -345,7 +341,7 @@ S_ROW_START → S_ROW_RUN: 逐行做 1D 逆变换（共 tu_height 行）
   ↓
 S_COL_START → S_COL_RUN: 逐列做 1D 逆变换（共 tu_width 列）
   ↓
-S_OUT: 输出 4×10bit 打包结果
+S_OUT: 3级流水线输出 4×10bit 打包结果
   ↓
 S_DONE → S_IDLE
 ```
@@ -355,34 +351,33 @@ S_DONE → S_IDLE
 ```
 it_info[6:0]    = tu_width     （变换宽度，4~64）
 it_info[13:7]   = tu_height    （变换高度，4~64）
-it_info[15:14]  = tr_type_hor  （水平变换类型：0=DCT2, 1=DST7, 2=DCT8）
+it_info[15:14]  = tr_type_hor  （水平变换类型：0=DCT2, 1=DCT8, 2=DST7）
 it_info[17:16]  = tr_type_ver  （垂直变换类型：同上）
 it_info[19:18]  = lfnst_tr_set_idx （LFNST 变换集索引：0~3）
 it_info[21:20]  = lfnst_idx    （LFNST 索引：0=不使用, 1或2=使用）
 ```
 
+**关键设计：行/列共享引擎**
+
+行变换和列变换**严格串行**，共享同一组 4 个 MAC（5 DSP 含 LFNST）。行阶段读 in_mem 写 tp_buf，列阶段读 tp_buf 写 out_mem。
+
 **关键设计：ROM 共享**
 
-行引擎和列引擎**严格串行**（先做完所有行变换，再做所有列变换），所以可以共享一个 ROM。通过 `is_col_phase` 信号切换 ROM 地址来源。
+行/列共享一个变换核 ROM（8176 条目），通过 phase 信号区分，无需地址 MUX。
 
 **关键设计：转置缓冲区**
 
-行变换输出按行写入 tp_buf（顺序写），列变换按列读取 tp_buf（stride = tu_width）。这就是行列分解中"转置"的实现。
+行变换输出按行写入 tp_buf（顺序写），列变换按列读取 tp_buf（stride = tu_width）。
 
-### 4.8 its_core_500.v — 500MHz 计算核心
+**500MHz 时序优化：**
 
-**作用：** 与 its_top.v 功能完全等价，但使用 FIFO 接口，运行在 500MHz 时钟域。
-
-**与 its_top.v 的主要区别：**
-
-| 特性 | its_top.v | its_core_500.v |
-|------|-----------|----------------|
-| I/O 接口 | 直接信号 | FIFO 接口（cmd/input/output） |
-| 时钟 | 单时钟 | 单时钟（clk_core） |
-| 输入内存 | reg 数组 | XPM BRAM（综合时） |
-| LFNST 写回 | 直接写 in_mem | 写 lfnst_out_buf（覆盖缓冲） |
-| 输出控制 | 简单计数 | 3 级流水线 + ready/valid |
-| 复位 | 异步复位 | 同步复位（经过 rst_sync） |
+| 特性 | 说明 |
+|------|------|
+| 输入内存 | XPM BRAM（READ_LATENCY_B=1，消除 MUX 树） |
+| LFNST 写回 | lfnst_out_buf 覆盖缓冲（避免高扇出 BRAM 写） |
+| 输出控制 | 3 级流水线 + ready/valid 保持（反压安全） |
+| ROM 地址 | 寄存器累加器（barrel shifter 预计算） |
+| 输入 | FWFT 寄存器切片（打断 FIFO→BRAM 路径） |
 
 **LFNST 覆盖缓冲（overlay buffer）：**
 
@@ -402,7 +397,7 @@ Stage 2: FIFO 写入（write_fire = valid && !full）
 
 `out_cnt` 只在 `write_fire` 时递增（不是在读取时），确保在反压（FIFO 满）时不丢失数据。
 
-### 4.9 its_top_500_wrapper.v — 跨时钟域顶层
+### 4.8 its_top_500_wrapper.v — 跨时钟域提交顶层
 
 **作用：** 在外部接口时钟（clk_if，如 100MHz）和核心时钟（clk_core，500MHz）之间建立 CDC 桥梁。
 
@@ -697,9 +692,8 @@ endcase
 
 ```
 Level 1: its_tb_simple.v    → 单元测试 transform_engine
-Level 2: its_tb.v           → 集成测试 its_top（1444 个用例）
-Level 3: its_core_500_tb.v  → 核心测试 its_core_500（94 个用例）
-Level 4: its_tb_500.v       → 系统测试 wrapper（1537 个用例）
+Level 2: its_core_500_tb.v  → 核心测试 its_core_500（94 个用例）
+Level 3: its_tb_500.v       → 系统测试 wrapper（1537 个用例）
 ```
 
 ### 8.2 测试向量生成
@@ -763,7 +757,7 @@ end
 ### 8.5 运行回归测试
 
 ```bash
-# its_top 1444 测试
+# core_500 94 测试
 cd sim && vsim -c -do "source run.do; quit -f"
 
 # wrapper 1537 测试
@@ -794,7 +788,7 @@ cd sim && vsim -c -do "source run_core_500.do; quit -f"
 | mac_data_r 复制 | its_transform_engine.v | 4 份数据副本就近放置 DSP |
 | XPM BRAM | its_core_500.v | 确保 in_mem 用 Block RAM |
 | LFNST overlay | its_core_500.v | 避免大 BRAM 高扇出写 |
-| out_mem 同步读 | its_top.v | 打断 BRAM→OBUF 关键路径 |
+| out_mem 同步读 | its_core_500.v | 3级流水线打断 BRAM→OBUF 关键路径 |
 
 ### 9.3 资源估算
 
@@ -823,13 +817,11 @@ cd sim && vsim -c -do "source run_core_500.do; quit -f"
 | `rtl/its_lfnst_rom.v` | 26 | LFNST 系数 ROM |
 | `rtl/its_transform_engine.v` | 632 | 4 路并行 MAC 变换引擎 |
 | `rtl/its_lfnst.v` | 405 | LFNST 逆变换模块 |
-| `rtl/its_top.v` | 578 | 单时钟顶层 |
-| `rtl/its_core_500.v` | 857 | 500MHz 计算核心 |
-| `rtl/its_top_500_wrapper.v` | 298 | 跨时钟域顶层 |
+| `rtl/its_core_500.v` | 868 | 500MHz 计算核心（行/列共享引擎） |
+| `rtl/its_top_500_wrapper.v` | 298 | 跨时钟域提交顶层 |
 | `rtl/async_fifo.v` | 173 | Gray 码异步 FIFO |
 | `rtl/rst_sync.v` | 23 | 复位同步器 |
 | `rtl/fifo_fwft_reg_slice.v` | 47 | FWFT 寄存器切片 |
-| `tb/its_tb.v` | ~750 | its_top 集成测试（1444 用例） |
 | `tb/its_tb_500.v` | ~1250 | wrapper 系统测试（1537 用例） |
 | `tb/its_core_500_tb.v` | ~750 | core_500 核心测试（94 用例） |
 | `tb/its_tb_simple.v` | ~150 | transform_engine 单元测试 |
