@@ -1,6 +1,8 @@
 // ===================================================================
-// ITS Top Level Module - With LFNST integration
-// 22-bit it_info interface per competition spec
+// ITS Top Level Module - v1.2 Shared Engine Architecture
+// Single-clock, competition-spec interface (22-bit it_info)
+// Row/Column share 4 MACs: 5 DSP total (4 engine + 1 LFNST)
+// Optimized from v1.0 dual-engine (9 DSP → 5 DSP, -44%)
 // ===================================================================
 
 `include "its_pkg.v"
@@ -63,21 +65,29 @@ module its_top (
     reg [11:0] row_eng_rd_addr;
     reg [11:0] col_eng_rd_addr;
 
-    // Row engine signals
-    wire [15:0] row_out_data;
-    wire        row_out_vld;
-    wire        row_done;
-    wire        row_data_in_req;
-    wire [13:0] row_rom_addr;
-    wire [15:0] row_rom_coeff;
+    // Shared engine signals (row/col reuse: saves 4 MACs, 9 DSP → 5 DSP)
+    wire [15:0] shared_eng_out_data;
+    wire        shared_eng_out_vld;
+    wire        shared_done;
+    wire        shared_data_in_req;
+    wire [13:0] shared_eng_rom_addr;
+    wire [15:0] shared_rom_coeff;
 
-    // Column engine signals
-    wire [15:0] col_out_data;
-    wire        col_out_vld;
-    wire        col_done;
-    wire        col_data_in_req;
-    wire [13:0] col_rom_addr;
-    wire [15:0] col_rom_coeff;
+    // Phase signals: 0 = row transform, 1 = column transform
+    wire        is_row_phase = (state == S_ROW_START) || (state == S_ROW_RUN);
+    wire        is_col_phase = (state == S_COL_START) || (state == S_COL_RUN);
+
+    // Column phase pipeline: register tp_buf read for timing
+    reg signed [15:0] tp_buf_rd_data;
+    reg               col_data_in_vld_d;
+
+    // Row/col output routing (derived from shared engine)
+    wire        row_out_vld = is_row_phase ? shared_eng_out_vld : 1'b0;
+    wire        row_done   = is_row_phase ? shared_done      : 1'b0;
+    wire        col_out_vld = is_col_phase ? shared_eng_out_vld : 1'b0;
+    wire        col_done   = is_col_phase ? shared_done      : 1'b0;
+    wire [15:0] row_out_data = shared_eng_out_data;
+    wire [15:0] col_out_data = shared_eng_out_data;
 
     // Transpose buffer
     reg signed [15:0] tp_buf [0:4095];
@@ -210,21 +220,13 @@ module its_top (
     end
 
     // ========================================
-    // ROM Instantiation (shared: row/col engines are strictly sequential)
+    // ROM Instantiation (shared: row/col are strictly sequential)
     // ========================================
-    wire        is_col_phase = (state == S_COL_START || state == S_COL_RUN);
-    wire [13:0] shared_rom_addr = is_col_phase ? col_rom_addr : row_rom_addr;
-    wire [15:0] shared_rom_coeff;
-
     its_rom u_shared_rom (
         .clk   (clk),
-        .addr  (shared_rom_addr),
+        .addr  (shared_eng_rom_addr),
         .coeff (shared_rom_coeff)
     );
-
-    // Route shared ROM output to both engines
-    assign row_rom_coeff = shared_rom_coeff;
-    assign col_rom_coeff = shared_rom_coeff;
 
     // LFNST ROM
     its_lfnst_rom u_lfnst_rom (
@@ -398,23 +400,34 @@ module its_top (
     end
 
     // ========================================
-    // Row Transform Engine
+    // Shared Transform Engine (Row/Column复用)
     // ========================================
-    its_transform_engine u_row_engine (
-        .clk        (clk),
-        .rst_n      (rst_n),
-        .start      (state == S_ROW_START),
-        .tr_type    (row_tr_type),
-        .size       (tu_width[6:0]),
-        .data_in    (in_mem[row_base_addr + row_eng_rd_addr]),
-        .data_in_vld(state == S_ROW_RUN),
-        .data_in_req(row_data_in_req),
-        .rom_addr   (row_rom_addr),
-        .rom_coeff  (row_rom_coeff),
-        .data_out   (row_out_data),
-        .data_out_vld(row_out_vld),
+    // Row和Column变换串行执行，共享同一组4个MAC
+    // DSP: 4 (engine) + 1 (LFNST) = 5 (vs 9 in dual-engine v1.0)
+
+    // MUX: input data source — row reads in_mem, col reads pipelined tp_buf
+    wire [15:0] shared_data_in = is_row_phase ?
+        in_mem[row_base_addr + row_eng_rd_addr] : tp_buf_rd_data;
+    wire        shared_data_in_vld = is_row_phase ?
+        (state == S_ROW_RUN) : col_data_in_vld_d;
+    wire [1:0]  shared_tr_type = is_row_phase ? row_tr_type : col_tr_type;
+    wire [6:0]  shared_size = is_row_phase ? tu_width[6:0] : tu_height[6:0];
+
+    its_transform_engine u_shared_engine (
+        .clk         (clk),
+        .rst_n       (rst_n),
+        .start       (is_row_phase ? (state == S_ROW_START) : (state == S_COL_START)),
+        .tr_type     (shared_tr_type),
+        .size        (shared_size),
+        .data_in     (shared_data_in),
+        .data_in_vld (shared_data_in_vld),
+        .data_in_req (shared_data_in_req),
+        .rom_addr    (shared_eng_rom_addr),
+        .rom_coeff   (shared_rom_coeff),
+        .data_out    (shared_eng_out_data),
+        .data_out_vld(shared_eng_out_vld),
         .data_out_req(1'b1),
-        .done       (row_done)
+        .done        (shared_done)
     );
 
     // Row engine read address
@@ -423,7 +436,7 @@ module its_top (
             row_eng_rd_addr <= 12'd0;
         else if (state == S_ROW_START)
             row_eng_rd_addr <= 12'd0;
-        else if (state == S_ROW_RUN && row_data_in_req)
+        else if (state == S_ROW_RUN && is_row_phase && shared_data_in_req)
             row_eng_rd_addr <= row_eng_rd_addr + 12'd1;
         else if (state != S_ROW_RUN)
             row_eng_rd_addr <= 12'd0;
@@ -456,39 +469,29 @@ module its_top (
     end
 
     // ========================================
-    // Column Transform Engine
+    // Column Read Address + tp_buf Pipeline
     // ========================================
-    its_transform_engine u_col_engine (
-        .clk        (clk),
-        .rst_n      (rst_n),
-        .start      (state == S_COL_START),
-        .tr_type    (col_tr_type),
-        .size       (tu_height[6:0]),
-        .data_in    (tp_buf[tp_rd_base + col_eng_rd_addr]),
-        .data_in_vld(state == S_COL_RUN),
-        .data_in_req(col_data_in_req),
-        .rom_addr   (col_rom_addr),
-        .rom_coeff  (col_rom_coeff),
-        .data_out   (col_out_data),
-        .data_out_vld(col_out_vld),
-        .data_out_req(1'b1),
-        .done       (col_done)
-    );
-
-    // Column engine read address
-    // Row engine writes sequentially (row-major): result[row][col] at row*W+col
-    // Column c data at tp_buf[c, c+W, c+2W, ...] (stride = tu_width)
-    // tp_rd_base = col_idx * tu_height (unused with sequential layout)
-    // Read with stride tu_width to get column data
+    // tp_buf read is registered (1-cycle latency) to break BRAM timing path.
+    // col_data_in_vld_d aligns with tp_buf_rd_data (both delayed by 1 cycle).
     always @(posedge clk or negedge rst_n) begin
-        if (!rst_n)
-            col_eng_rd_addr <= 12'd0;
-        else if (state == S_COL_START)
-            col_eng_rd_addr <= {6'd0, col_idx[6:0]};  // start at column offset
-        else if (state == S_COL_RUN && col_data_in_req)
-            col_eng_rd_addr <= col_eng_rd_addr + {5'd0, tu_width[6:0]};
-        else if (state != S_COL_RUN)
-            col_eng_rd_addr <= 12'd0;
+        if (!rst_n) begin
+            col_eng_rd_addr   <= 12'd0;
+            col_data_in_vld_d <= 1'b0;
+        end else if (is_col_phase) begin
+            if (state == S_COL_START)
+                col_eng_rd_addr <= {6'd0, col_idx[6:0]};  // start at column offset
+            else if (state == S_COL_RUN && shared_data_in_req)
+                col_eng_rd_addr <= col_eng_rd_addr + {5'd0, tu_width[6:0]};
+            col_data_in_vld_d <= (state == S_COL_RUN);
+        end else begin
+            col_eng_rd_addr   <= 12'd0;
+            col_data_in_vld_d <= 1'b0;
+        end
+    end
+
+    // tp_buf read data register (1-cycle pipeline for BRAM timing)
+    always @(posedge clk) begin
+        tp_buf_rd_data <= tp_buf[tp_rd_base + col_eng_rd_addr];
     end
 
     // ========================================

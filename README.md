@@ -41,7 +41,7 @@
 ```
 vvc-its/
 ├── rtl/                            # RTL 源代码
-│   ├── its_top.v                   # 顶层模块 (单时钟，赛题接口)
+│   ├── its_top.v                   # 顶层模块 v1.2 (单时钟，赛题接口，共享引擎 5 DSP)
 │   ├── its_top_500_wrapper.v       # 500MHz 顶层 wrapper (CDC + 赛题接口)
 │   ├── its_core_500.v              # 500MHz 计算核 (FIFO 接口)
 │   ├── its_pkg.v                   # 共享 package (状态编码 + 位移乘法函数)
