@@ -41,8 +41,7 @@
 ```
 vvc-its/
 ├── rtl/                            # RTL 源代码
-│   ├── its_top.v                   # 顶层模块 (单时钟，赛题接口)
-│   ├── its_top_500_wrapper.v       # 500MHz 顶层 wrapper (CDC + 赛题接口)
+│   ├── its_top_500_wrapper.v       # 500MHz 提交顶层 (CDC + 赛题接口, 5 DSP)
 │   ├── its_core_500.v              # 500MHz 计算核 (FIFO 接口)
 │   ├── its_pkg.v                   # 共享 package (状态编码 + 位移乘法函数)
 │   ├── async_fifo.v                # Gray-code 异步 FIFO (CDC)
@@ -56,7 +55,6 @@ vvc-its/
 │   ├── rom_coeffs.hex              # 变换核系数数据
 │   └── lfnst_coeffs.hex            # LFNST 系数数据
 ├── tb/                             # 测试平台
-│   ├── its_tb.v                    # its_top 测试平台 (1444 个测试用例)
 │   ├── its_tb_500.v                # 500MHz wrapper 测试平台 (1537 个测试)
 │   ├── its_core_500_tb.v           # core_500 测试平台 (94 个测试)
 │   ├── its_tb_simple.v             # 简化测试平台
@@ -598,7 +596,7 @@ vsim -c work.its_core_500_tb -do "run -all"
 
 ### v3.0 → v3.1 改动
 
-- 引入 `its_core_500.v`：独立于 `its_top.v` 的 500MHz 计算核
+- `its_core_500.v`：500MHz 计算核，行/列共享引擎 (5 DSP)
 - 接口改为 FIFO 协议 (cmd_fifo 23-bit, input_fifo 29-bit, output_fifo 40-bit)
 - 输出管线增加 ready/valid 握手，支持反压
 - OOC 综合脚本 `its_core_500_ooc.tcl`
