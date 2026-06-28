@@ -77,9 +77,18 @@ module its_top (
     wire        is_row_phase = (state == S_ROW_START) || (state == S_ROW_RUN);
     wire        is_col_phase = (state == S_COL_START) || (state == S_COL_RUN);
 
+    // in_mem BRAM read pipeline (1-cycle latency for 500MHz timing)
+    // in_mem is 4096×16: synthesized as BRAM with registered read
+    reg [11:0]        in_mem_rd_addr;
+    reg signed [15:0] in_mem_dout_r;
+
     // Column phase pipeline: register tp_buf read for timing
     reg signed [15:0] tp_buf_rd_data;
     reg               col_data_in_vld_d;
+
+    // Delayed valid signals (align with BRAM 1-cycle read latency)
+    reg        row_data_in_vld_r;
+    reg        lfnst_data_in_vld_d;
 
     // Row/col output routing (derived from shared engine)
     wire        row_out_vld = is_row_phase ? shared_eng_out_vld : 1'b0;
@@ -246,8 +255,8 @@ module its_top (
         .lfnst_tr_set_idx(lfnst_tr_set_idx),
         .tu_width        (tu_width),
         .tu_height       (tu_height),
-        .data_in         (in_mem[lfnst_rd_mem_addr]),
-        .data_in_vld     (state == S_LFNST && lfnst_data_in_req),
+        .data_in         (in_mem_dout_r),
+        .data_in_vld     (lfnst_data_in_vld_d),
         .data_in_req     (lfnst_data_in_req),
         .data_out        (lfnst_data_out),
         .data_out_vld    (lfnst_data_out_vld),
@@ -400,16 +409,47 @@ module its_top (
     end
 
     // ========================================
-    // Shared Transform Engine (Row/Column复用)
+    // in_mem BRAM Read Pipeline
+    // ========================================
+    // in_mem compiles to BRAM with 1-cycle read latency.
+    // Pipeline: address at cycle N → data at cycle N+1.
+    // row_data_in_vld_r is delayed 1 cycle to align with data.
+
+    // Read address mux: LFNST vs row engine
+    always @(*) begin
+        if (state == S_LFNST)
+            in_mem_rd_addr = lfnst_rd_mem_addr;
+        else
+            in_mem_rd_addr = row_base_addr + row_eng_rd_addr;
+    end
+
+    // Registered read data (BRAM output, 1-cycle latency)
+    always @(posedge clk) begin
+        in_mem_dout_r <= in_mem[in_mem_rd_addr];
+    end
+
+    // Delayed valid signals (align with BRAM read latency)
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            row_data_in_vld_r    <= 1'b0;
+            lfnst_data_in_vld_d  <= 1'b0;
+        end else begin
+            row_data_in_vld_r   <= (state == S_ROW_RUN);
+            lfnst_data_in_vld_d <= (state == S_LFNST && lfnst_data_in_req);
+        end
+    end
+
+    // ========================================
+    // Shared Transform Engine (Row/Column共用)
     // ========================================
     // Row和Column变换串行执行，共享同一组4个MAC
     // DSP: 4 (engine) + 1 (LFNST) = 5 (vs 9 in dual-engine v1.0)
 
-    // MUX: input data source — row reads in_mem, col reads pipelined tp_buf
+    // MUX: input data source — row reads pipelined in_mem, col reads pipelined tp_buf
     wire [15:0] shared_data_in = is_row_phase ?
-        in_mem[row_base_addr + row_eng_rd_addr] : tp_buf_rd_data;
+        in_mem_dout_r : tp_buf_rd_data;
     wire        shared_data_in_vld = is_row_phase ?
-        (state == S_ROW_RUN) : col_data_in_vld_d;
+        row_data_in_vld_r : col_data_in_vld_d;
     wire [1:0]  shared_tr_type = is_row_phase ? row_tr_type : col_tr_type;
     wire [6:0]  shared_size = is_row_phase ? tu_width[6:0] : tu_height[6:0];
 
